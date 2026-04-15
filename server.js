@@ -34,8 +34,23 @@ mongoose.connection.on("error", (err) => {
 });
 
 /* MIDDLEWARE */
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "https://onecartfrontend.netlify.app",
+  process.env.FRONTEND_URL,        // set this in Railway env vars once you have the Netlify URL
+].filter(Boolean);                 // removes undefined if FRONTEND_URL is not set
+
 app.use(cors({
-  origin: "*",
+  origin: (origin, callback) => {
+    // allow requests with no origin (mobile apps, curl, Postman)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    callback(new Error(`CORS blocked: ${origin}`));
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "x-rtb-fingerprint-id", "request-id"],
   exposedHeaders: ["x-rtb-fingerprint-id", "request-id"]
 }));
 app.use(express.json());
@@ -90,7 +105,9 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: "*"
+    origin: allowedOrigins,
+    credentials: true,
+    methods: ["GET", "POST"]
   }
 });
 
