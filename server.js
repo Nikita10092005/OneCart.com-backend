@@ -38,10 +38,12 @@ const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:3000",
   "https://onecartfrontend.netlify.app",
-  process.env.FRONTEND_URL,        // set this in Railway env vars once you have the Netlify URL
-].filter(Boolean);                 // removes undefined if FRONTEND_URL is not set
+  "https://onecart-backend-production-400c.up.railway.app",
+  process.env.FRONTEND_URL,
+].filter(Boolean);
 
-app.use(cors({
+
+const corsOptions = {
   origin: (origin, callback) => {
     // allow requests with no origin (mobile apps, curl, Postman)
     if (!origin) return callback(null, true);
@@ -50,9 +52,18 @@ app.use(cors({
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "x-rtb-fingerprint-id", "request-id"],
+  allowedHeaders: [
+    "Content-Type", 
+    "Authorization", 
+    "x-rtb-fingerprint-id", 
+    "request-id",
+    "X-Requested-With",
+    "Accept"
+  ],
   exposedHeaders: ["x-rtb-fingerprint-id", "request-id"]
-}));
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
 /* ROUTES */
@@ -99,6 +110,7 @@ app.use("/api/affiliate",        require("./routes/affiliateRoutes"));
 
 /* STATIC */
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use(express.static(path.join(__dirname, "public")));
 
 /* 🔥 SOCKET SERVER SETUP */
 const server = http.createServer(app);
@@ -186,12 +198,28 @@ io.on("connection", (socket) => {
       }
     }
   });
+});
 
+/* FRONTEND CATCH-ALL */
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api")) {
+    return next();
+  }
+  res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
 /* SERVER */
 const PORT = process.env.PORT || 5000;
+const fs = require('fs');
+console.log("Root files:", fs.readdirSync(__dirname));
+try {
+  console.log("Public files:", fs.readdirSync(path.join(__dirname, "public")));
+  console.log("Assets:", fs.readdirSync(path.join(__dirname, "public", "assets")));
+} catch(e) {
+  console.log("Public folder error:", e.message);
+}
 
 server.listen(PORT, () => {
+
   console.log(`Server running on port ${PORT}`);
 });
