@@ -4,3 +4,12 @@
 !.env.example
 node_modules/
 *.log
+
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+coverage/
+*.log
+uploads/
