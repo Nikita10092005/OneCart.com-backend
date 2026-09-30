@@ -1,0 +1,1 @@
+var e=`https://onecart-com.onrender.com/api`.replace(/\/+$/,``).replace(/(?:\/api)?$/,`/api`),t=`https://onecart-com.onrender.com`.replace(/\/+$/,``);export{t as n,e as t};
