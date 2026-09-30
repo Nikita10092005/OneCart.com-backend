@@ -20,13 +20,17 @@ const orderSchema = new mongoose.Schema({
     default: "Ordered"
   },
   totalAmount: Number,
+  discount: Number,
+  tax: Number,
+  couponCode: String,
   products: [
     {
       productId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "Product"
       },
-      quantity: Number
+      quantity: Number,
+      price: Number
     }
   ],
   trackingStages: [

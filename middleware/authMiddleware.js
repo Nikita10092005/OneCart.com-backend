@@ -13,7 +13,7 @@ const protect = async (req, res, next) => {
 
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-      const user = await User.findById(decoded.id).select("accountStatus role");
+      const user = await User.findById(decoded.id).select("accountStatus role email");
 
       if (!user) {
         return res.status(401).json({ message: "User not found" });
@@ -24,7 +24,8 @@ const protect = async (req, res, next) => {
       }
 
       req.user = decoded.id;
-      req.userRole = decoded.role;
+      req.userRole = user.role;
+      req.userEmail = user.email;
 
       return next();
     } catch (error) {

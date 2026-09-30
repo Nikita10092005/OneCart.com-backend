@@ -57,6 +57,7 @@ const deleteCoupon = async (req, res) => {
 const validateCoupon = async (req, res) => {
   try {
     const { code, orderAmount } = req.body;
+    if (typeof code !== 'string' || !Number.isFinite(orderAmount) || orderAmount <= 0) return res.status(400).json({success:false,message:'Invalid coupon request'});
     const coupon = await Coupon.findOne({ 
       code: code.toUpperCase(), 
       isActive: true 
@@ -66,6 +67,7 @@ const validateCoupon = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid coupon code" });
     }
 
+    if (coupon.applicableProducts?.length || coupon.applicableCategories?.length) return res.status(400).json({success:false,message:'This coupon is not available for this cart'});
     const now = new Date();
     if (now < coupon.startDate || now > coupon.endDate) {
       return res.status(400).json({ success: false, message: "Coupon expired" });
@@ -96,7 +98,7 @@ const validateCoupon = async (req, res) => {
         code: coupon.code,
         discountType: coupon.discountType,
         discountValue: coupon.discountValue,
-        discountAmount: discount
+        discountAmount: Math.round(Math.min(orderAmount, Math.max(0,discount))*100)/100
       }
     });
   } catch (error) {
@@ -156,7 +158,7 @@ const calculateTax = async (req, res) => {
   try {
     const { country, state, zipCode, amount } = req.body;
     
-    let query = { country, isActive: true };
+    let query = { country, isActive: true, state: {$in:['',null]}, zipCode: {$in:['',null]} };
     if (state) query.state = state;
     if (zipCode) query.zipCode = zipCode;
 
@@ -217,14 +219,24 @@ const getAllRefunds = async (req, res) => {
 
 const createRefundRequest = async (req, res) => {
   try {
-    const { orderId, items, reason, detailedReason, refundMethod, totalRefundAmount: clientTotal } = req.body;
+    const { orderId, items, reason, detailedReason, refundMethod } = req.body;
     
     const order = await Order.findById(orderId).populate("products.productId");
     if (!order) {
       return res.status(404).json({ success: false, message: "Order not found" });
     }
 
-    // Try to calculate server-side; fall back to client-provided value if price not on item
+    if (String(order.userId) !== String(req.user)) return res.status(403).json({message:'Access denied'});
+    if (order.status !== 'Delivered' && !(order.status === 'Cancelled' && order.paymentId)) return res.status(400).json({message:'A refund is available after delivery or cancellation of an online payment'});
+    if (!Array.isArray(items) || !items.length) return res.status(400).json({message:'Refund items are required'});
+    const seen = new Set();
+    for (const item of items) {
+      const original = order.products.find(p => String(p.productId?._id || p.productId) === item.productId);
+      if (!original || !Number.isSafeInteger(item.quantity) || item.quantity < 1 || item.quantity > original.quantity || seen.has(item.productId)) return res.status(400).json({message:'Invalid refund items'});
+      seen.add(item.productId);
+    }
+    if (await Refund.exists({orderId,status:{$ne:'rejected'}})) return res.status(409).json({message:'A refund request already exists for this order'});
+    // Calculate from stored order prices.
     let totalRefundAmount = 0;
     for (const item of items) {
       const orderItem = order.products.find(
@@ -236,11 +248,8 @@ const createRefundRequest = async (req, res) => {
       }
     }
 
-    // If calculation failed (NaN or 0), use client-provided total or order total
-    if (!totalRefundAmount || isNaN(totalRefundAmount)) {
-      totalRefundAmount = clientTotal || order.totalAmount || 0;
-    }
-
+    if (!Number.isFinite(totalRefundAmount) || totalRefundAmount <= 0) return res.status(400).json({message:'Unable to calculate refund amount'});
+    totalRefundAmount = Math.min(totalRefundAmount, order.totalAmount - (order.status === 'Cancelled' ? (order.walletAmount || 0) : 0));
     const refund = await Refund.create({
       orderId,
       userId: order.userId,
@@ -257,66 +266,28 @@ const createRefundRequest = async (req, res) => {
   }
 };
 
-const updateRefundStatus = async (req, res) => {
+const updateRefundStatus = async(req,res) => {
+  const session = await require('mongoose').startSession();
   try {
-    const { status, adminNotes, refundTransactionId } = req.body;
-    const processedBy = req.user?._id || null;
-
-    const refund = await Refund.findById(req.params.id);
-    if (!refund) {
-      return res.status(404).json({ success: false, message: "Refund not found" });
-    }
-
-    if (status === "approved" && refund.refundMethod === "store_credit") {
-      const user = await User.findById(refund.userId);
-      if (!user) {
-        return res.status(404).json({ success: false, message: "User not found" });
-      }
-
-      const updatedUser = await User.findByIdAndUpdate(
-        refund.userId,
-        { $inc: { walletBalance: refund.totalRefundAmount } },
-        { new: true }
-      );
-
-      await WalletTransaction.create({
-        userId: refund.userId,
-        type: "credit",
-        source: "refund",
-        amount: refund.totalRefundAmount,
-        description: "Refund credit",
-        balanceAfter: updatedUser.walletBalance
-      });
-
-      const updatedRefund = await Refund.findByIdAndUpdate(
-        req.params.id,
-        { status: "completed", processedBy, adminNotes, refundTransactionId, processedAt: new Date() },
-        { new: true }
-      );
-
-      return res.json({ success: true, refund: updatedRefund });
-    }
-
-    if (status === "approved" && (refund.refundMethod === "original_payment" || refund.refundMethod === "bank_transfer")) {
-      const updatedRefund = await Refund.findByIdAndUpdate(
-        req.params.id,
-        { status: "approved", processedBy, adminNotes, refundTransactionId, processedAt: new Date() },
-        { new: true }
-      );
-
-      return res.json({ success: true, refund: updatedRefund });
-    }
-
-    const updatedRefund = await Refund.findByIdAndUpdate(
-      req.params.id,
-      { status, adminNotes, refundTransactionId, processedBy, processedAt: new Date() },
-      { new: true }
-    );
-
-    res.json({ success: true, refund: updatedRefund });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+    let refund;
+    await session.withTransaction(async()=>{
+      refund = await Refund.findById(req.params.id).session(session);
+      if (!refund) throw Object.assign(new Error('Refund not found'),{status:404});
+      const {status,adminNotes,refundTransactionId}=req.body;
+      const transitions={pending:['approved','rejected'],approved:['processing','completed'],processing:['completed']};
+      if (!transitions[refund.status]?.includes(status)) throw Object.assign(new Error('Invalid refund transition'),{status:400});
+      if (status === 'approved' && refund.refundMethod === 'store_credit') {
+        const user=await User.findByIdAndUpdate(refund.userId,{$inc:{walletBalance:refund.totalRefundAmount}},{new:true,session});
+        if (!user) throw new Error('Refund user missing');
+        await WalletTransaction.create([{userId:refund.userId,type:'credit',source:'refund',amount:refund.totalRefundAmount,description:'Refund credit',balanceAfter:user.walletBalance}],{session});
+        refund.status='completed';
+      } else {refund.status=status;}
+      refund.adminNotes=adminNotes;refund.refundTransactionId=refundTransactionId;refund.processedBy=req.user;refund.processedAt=new Date();
+      await refund.save({session});
+    });
+    res.json({success:true,refund});
+  } catch(e) {res.status(e.status||500).json({success:false,message:e.status?e.message:'Refund update failed'});}
+  finally {await session.endSession();}
 };
 
 const getRefundStats = async (req, res) => {

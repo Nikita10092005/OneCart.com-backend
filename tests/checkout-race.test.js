@@ -1,0 +1,21 @@
+jest.mock('../models/cartModel',()=>({deleteOne:jest.fn()}));
+jest.mock('../models/productModel',()=>({updateOne:jest.fn()}));
+jest.mock('../utils/checkout',()=>({quoteCart:jest.fn(),money:value=>Math.round(value*100)/100,fail:message=>Object.assign(new Error(message),{status:400})}));
+jest.mock('../utils/notificationService',()=>({}));
+const mongoose = require('mongoose');
+const Cart = require('../models/cartModel');
+const Product = require('../models/productModel');
+const {quoteCart} = require('../utils/checkout');
+const {createOrder} = require('../controllers/orderController');
+test('changed or already consumed cart is rejected before inventory is debited', async()=>{
+  const session = {withTransaction:async work=>work(),endSession:jest.fn()};
+  const start = jest.spyOn(mongoose,'startSession').mockResolvedValue(session);
+  quoteCart.mockResolvedValue({total:149,items:[{_id:'cart-row',quantity:1,productId:{_id:'product',price:100}}]});
+  Cart.deleteOne.mockResolvedValue({deletedCount:0});
+  const res={status:jest.fn().mockReturnThis(),json:jest.fn()};
+  await createOrder({user:'alice',body:{name:'Alice',phone:'1234567890',address:'Example',payment:'COD'}},res);
+  expect(res.status).toHaveBeenCalledWith(400);
+  expect(Product.updateOne).not.toHaveBeenCalled();
+  expect(session.endSession).toHaveBeenCalled();
+  start.mockRestore();
+});

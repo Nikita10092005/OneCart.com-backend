@@ -39,7 +39,7 @@ router.get("/payouts", protect, sellerOnly, sellerPayoutController.getPayouts);
 router.post("/payouts/backfill", protect, sellerOnly, sellerPayoutController.backfillPayouts);
 
 // PATCH /api/seller/payouts/:id/process — admin marks payout as processed
-router.patch("/payouts/:id/process", protect, sellerPayoutController.processPayout);
+router.patch("/payouts/:id/process", protect, require("../middleware/adminMiddleware"), sellerPayoutController.processPayout);
 
 // GET /api/seller/inventory
 router.get("/inventory", protect, sellerOnly, sellerInventoryController.getInventory);

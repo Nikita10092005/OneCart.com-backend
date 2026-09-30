@@ -98,34 +98,11 @@ const getAllOrders = async (req, res) => {
 };
 
 // UPDATE ORDER STATUS 🔥
-const updateOrderStatus = async (req, res) => {
-  try {
-    const { status } = req.body;
-
-    const order = await Order.findByIdAndUpdate(
-      req.params.id,
-      { status },
-      { new: true }
-    ).populate("products.productId", "price sellerId");
-
-    // Trigger payout when marked Delivered
-    if (status === "Delivered" && order) {
-      const { createPayoutOnDelivery } = require("./sellerPayoutController");
-      const commissionRate = parseFloat(process.env.PLATFORM_COMMISSION_RATE || "0.10");
-      for (const item of order.products) {
-        const product = item.productId;
-        if (product?.sellerId) {
-          const amount = (product.price || 0) * (item.quantity || 1) * (1 - commissionRate);
-          createPayoutOnDelivery(product.sellerId, order._id, amount);
-        }
-      }
-    }
-
-    res.json(order);
-
-  } catch (e) {
-    res.status(500).json({ message: "Status update failed" });
-  }
+const updateOrderStatus = async (req,res) => {
+  req.params.orderId = req.params.id;
+  const orders = require('./orderController');
+  if (req.body.status === 'Cancelled') return orders.cancelOrder(req,res);
+  return orders.updateOrderStage(req,res);
 };
 
 // DASHBOARD

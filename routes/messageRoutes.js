@@ -14,7 +14,7 @@
 // });
 
 // // GET ALL
-// router.get("/", async (req, res) => {
+// router.get("/", require("../middleware/adminMiddleware"), async (req, res) => {
 //   const msgs = await Message.find().sort({ createdAt: 1 });
 //   res.json(msgs);
 // });
@@ -30,7 +30,7 @@ const router = express.Router();
 const Message = require("../models/Message");
 
 // GET ALL MESSAGES (ADMIN PANEL)
-router.get("/", async (req, res) => {
+router.get("/", require("../middleware/adminMiddleware"), async (req, res) => {
   try {
     const messages = await Message.find().sort({ createdAt: 1 });
     res.json(messages);

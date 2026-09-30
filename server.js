@@ -5,11 +5,11 @@ const connectDB = require("./config/db");
 const mongoose = require("mongoose");
 const path = require("path");
 
-/* 🔥 DNS FORCE (ADD THIS) */
-const dns = require("dns");
-dns.setServers(["8.8.8.8", "8.8.4.4"]); // Google DNS
-
-/* 🔥 NEW IMPORTS */
+// Use the hosting platform's DNS resolver.
+const jwt = require('jsonwebtoken');
+const User = require('./models/User');
+const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,https://onecartfrontend.netlify.app').split(',').map(s=>s.trim()).filter(Boolean);
+/* Server imports */
 const http = require("http");
 const { Server } = require("socket.io");
 
@@ -21,24 +21,20 @@ const getAutoReply = require("./utils/autoReply");
 
 const app = express();
 
-/* DATABASE */
-connectDB();
-
-mongoose.connection.on("disconnected", () => {
-  console.warn("MongoDB disconnected. Attempting to reconnect…");
-  setTimeout(connectDB, 5000);
-});
-
-mongoose.connection.on("error", (err) => {
-  console.error("MongoDB connection error:", err.message);
-});
-
 /* MIDDLEWARE */
+app.disable('x-powered-by');
+if (process.env.TRUST_PROXY_HOPS) app.set('trust proxy',Number(process.env.TRUST_PROXY_HOPS));
+app.get('/api/health', (req,res) => res.status(mongoose.connection.readyState === 1 ? 200 : 503).json({status:mongoose.connection.readyState === 1 ? 'ok' : 'unavailable'}));
+
 app.use(cors({
-  origin: "*",
+  origin: allowedOrigins,
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "x-rtb-fingerprint-id", "request-id"],
   exposedHeaders: ["x-rtb-fingerprint-id", "request-id"]
 }));
-app.use(express.json());
+app.post('/api/payment/webhook',express.raw({type:'application/json',limit:'1mb'}),require('./controllers/paymentController').handleWebhook);
+app.use(express.json({limit:'1mb'}));
 
 /* ROUTES */
 const categoryRoutes = require("./routes/categoryRoutes");
@@ -59,6 +55,7 @@ app.use("/api/products", productRoutes);
 app.use("/api/cart", cartRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/auth", authRoutes);
+app.use('/api/newsletter',require('./routes/newsletterRoutes'));
 app.use("/api/admin", adminRoutes);
 app.use("/api/admin/analytics", analyticsRoutes);
 app.use("/api/reviews", reviewRoutes);
@@ -82,35 +79,65 @@ app.use("/api/card-application", require("./routes/cardApplicationRoutes"));
 app.use("/api/ad-inquiry",       require("./routes/adInquiryRoutes"));
 app.use("/api/affiliate",        require("./routes/affiliateRoutes"));
 
+app.use('/api', (req,res) => res.status(404).json({message:'API route not found'}));
+app.use((err,req,res,next) => {
+  if (res.headersSent) return next(err);
+  const status = err.name === 'CastError' || err.name === 'ValidationError' || err.code === 'LIMIT_FILE_SIZE' ? 400 : err.status || 500;
+  console.error('Request failed:',err.message);
+  res.status(status).json({message:status < 500 ? err.message : 'Something went wrong. Please try again.'});
+});
 /* STATIC */
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use("/uploads", express.static(path.resolve(process.env.UPLOAD_DIR || path.join(__dirname,'uploads')), {setHeaders:res=>res.setHeader('X-Content-Type-Options','nosniff')}));
 
 /* 🔥 SOCKET SERVER SETUP */
 const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: "*"
+    origin: allowedOrigins,
+    credentials: true,
+    methods: ["GET", "POST"]
   }
 });
 
 const productViewers = new Map();
 
-/* 🔥 SOCKET LOGIC */
+// Anonymous sockets may see product viewer counts, never private chat rooms.
+io.use(async(socket,next)=>{
+  const token=socket.handshake.auth?.token;
+  if (!token) return next();
+  try {
+    const decoded=jwt.verify(token,process.env.JWT_SECRET);
+    const user=await User.findById(decoded.id).select('email role accountStatus');
+    if (!user || ['banned','suspended'].includes(user.accountStatus)) return next(new Error('Unauthorized'));
+    socket.data.user={id:String(user._id),email:user.email,role:user.role};
+    next();
+  } catch { next(new Error('Unauthorized')); }
+});
+/* SOCKET LOGIC */
 io.on("connection", (socket) => {
 
   /* USER JOIN ROOM */
   socket.on("joinRoom", (userId) => {
-    socket.join(userId);
+    if (socket.data.user?.id === userId) socket.join(userId);
   });
 
   /* ADMIN JOIN */
   socket.on("joinAdmin", () => {
-    socket.join("admin");
+    if (socket.data.user?.role === 'admin') socket.join('admin');
   });
 
-  socket.on("sendMessage", async (msg) => {
+  socket.on('sendMessage', async (msg) => {
     try {
+      const identity = socket.data.user;
+      if (!identity || typeof msg?.text !== 'string' || !msg.text.trim() || msg.text.length > 2000) return;
+      const current = await User.findById(identity.id).select('role accountStatus');
+      if (!current || ['banned','suspended'].includes(current.accountStatus)) return;
+      const admin = current.role === 'admin';
+      if (admin && !mongoose.isValidObjectId(msg.userId)) return;
+      const recipient = admin ? await User.findById(msg.userId).select('email') : null;
+      if (admin && !recipient) return;
+      msg = {userId:admin ? msg.userId : identity.id,userEmail:admin ? recipient.email : identity.email,text:msg.text.trim(),sender:admin ? 'bot' : 'user'};
       const savedMsg = await Message.create({
         userId: msg.userId,
         userEmail: msg.userEmail,
@@ -123,6 +150,7 @@ io.on("connection", (socket) => {
 
       if (msg.sender === "user") {
         setTimeout(async () => {
+          try {
           const replyText = getAutoReply(msg.text);
           const botMsg = await Message.create({
             userId: msg.userId,
@@ -132,6 +160,7 @@ io.on("connection", (socket) => {
           });
           io.to(msg.userId).emit("receiveMessage", botMsg);
           io.to("admin").emit("receiveMessage", botMsg);
+          } catch(e) { console.error('Chat reply:',e.message); }
         }, 800);
       }
 
@@ -141,7 +170,9 @@ io.on("connection", (socket) => {
   });
 
   /* PRODUCT ROOM — viewer count tracking */
-  socket.on("joinProductRoom", ({ productId }) => {
+  socket.on("joinProductRoom", ({ productId } = {}) => {
+    if (!mongoose.isValidObjectId(productId)) return;
+    socket.join(`product:${productId}`);
     if (!productViewers.has(productId)) {
       productViewers.set(productId, new Set());
     }
@@ -151,7 +182,7 @@ io.on("connection", (socket) => {
     socket.join(`product:${productId}`);
   });
 
-  socket.on("leaveProductRoom", ({ productId }) => {
+  socket.on("leaveProductRoom", ({ productId } = {}) => {
     if (productViewers.has(productId)) {
       productViewers.get(productId).delete(socket.id);
       const count = productViewers.get(productId).size;
@@ -166,6 +197,7 @@ io.on("connection", (socket) => {
         viewers.delete(socket.id);
         const count = viewers.size;
         io.to(`product:${productId}`).emit("viewerCount", { productId, count });
+        if (!count) productViewers.delete(productId);
       }
     }
   });
@@ -175,6 +207,10 @@ io.on("connection", (socket) => {
 /* SERVER */
 const PORT = process.env.PORT || 5000;
 
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+async function start() {
+  for (const key of ['MONGO_URI','JWT_SECRET']) if (!process.env[key]) throw new Error(key+' must be configured');
+  await connectDB();
+  server.listen(PORT, () => console.log('Server running on port '+PORT));
+}
+start().catch(error=>{console.error('Startup failed:',error.message);process.exit(1);});
+process.on('SIGTERM',()=>server.close(()=>mongoose.disconnect().finally(()=>process.exit(0))));

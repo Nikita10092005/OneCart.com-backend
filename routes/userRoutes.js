@@ -1,22 +1,17 @@
 const express = require("express");
 const router = express.Router();
 const User = require("../models/User");
-const multer = require("multer");
-
-// IMAGE UPLOAD CONFIG
-const storage = multer.diskStorage({
-  destination: "uploads/",
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + "-" + file.originalname);
-  }
+const upload = require('../middleware/upload');
+router.use(require('../middleware/authMiddleware'));
+router.use('/profile/:id', (req,res,next) => {
+  if (req.params.id !== String(req.user)) return res.status(403).json({message:'Access denied'});
+  next();
 });
-
-const upload = multer({ storage });
 
 // GET PROFILE
 router.get("/profile/:id", async (req, res) => {
   try {
-    const user = await User.findById(req.params.id);
+    const user = await User.findById(req.params.id).select("-password");
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
@@ -44,7 +39,7 @@ router.put("/profile/:id", upload.single("profilePic"), async (req, res) => {
     updates.profilePic = req.file.filename;
   }
 
-  const user = await User.findByIdAndUpdate(req.params.id, updates, { new: true });
+  const user = await User.findByIdAndUpdate(req.params.id, updates, { new: true, runValidators: true }).select("-password");
 
   res.json(user);
 });

@@ -48,7 +48,7 @@ router.post("/taxes/calculate", calculateTax);
 router.get("/refunds/my", protect, getMyRefunds);
 router.get("/refunds", adminOnly, getAllRefunds);
 router.get("/refunds/stats", adminOnly, getRefundStats);
-router.post("/refunds", createRefundRequest);
+router.post("/refunds", protect, createRefundRequest);
 router.put("/refunds/:id", adminOnly, updateRefundStatus);
 
 /* ================ PAYMENT SETTINGS ROUTES ================ */

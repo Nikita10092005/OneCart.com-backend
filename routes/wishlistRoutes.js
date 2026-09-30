@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+router.use(require('../middleware/authMiddleware'));
 
 const { addToWishlist, getWishlist, removeFromWishlist } = require("../controllers/wishlistController");
 

@@ -1,6 +1,7 @@
 const Payout = require("../models/payoutModel");
 const Product = require("../models/productModel");
 const Order = require("../models/orderModel");
+const sellerTotals = require("../utils/sellerTotals");
 
 const getPayouts = async (req, res) => {
   try {
@@ -37,13 +38,10 @@ const backfillPayouts = async (req, res) => {
 
     let created = 0;
     for (const order of orders) {
-      for (const item of order.products) {
-        const product = item.productId;
-        if (!product?.sellerId) continue;
-        if (product.sellerId.toString() !== req.user) continue;
+      for (const [sellerId, amount] of sellerTotals(order.products, commissionRate)) {
+        if (sellerId !== req.user.toString()) continue;
         const existing = await Payout.findOne({ sellerId: req.user, orderId: order._id });
         if (existing) continue;
-        const amount = (product.price || 0) * (item.quantity || 1) * (1 - commissionRate);
         await Payout.create({ sellerId: req.user, orderId: order._id, amount, status: "pending" });
         created++;
       }

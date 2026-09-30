@@ -8,6 +8,9 @@ router.post("/", sendMessage);
 router.get("/", protect, adminMiddleware, getMessages);
 router.put("/:id/reply", protect, adminMiddleware, replyToQuery);
 router.put("/:id/status", protect, adminMiddleware, updateStatus);
-router.get("/user/:email", getUserQueries);
+router.get('/user/:email', protect, (req,res,next) => {
+  if (req.params.email.toLowerCase() !== req.userEmail?.toLowerCase() && req.userRole !== 'admin') return res.status(403).json({message:'Access denied'});
+  next();
+}, getUserQueries);
 
 module.exports = router;

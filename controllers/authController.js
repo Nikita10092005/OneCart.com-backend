@@ -13,7 +13,11 @@ const registerUser = async (req,res)=>{
 
 try{
 
-const {name,email,password} = req.body;
+const {name,password} = req.body;
+const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+if (typeof name !== 'string' || !name.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || typeof password !== 'string' || password.length < 6 || Buffer.byteLength(password) > 72) {
+  return res.status(400).json({message:'Enter a name, valid email and a password of 6–72 bytes.'});
+}
 
 const userExists = await User.findOne({email});
 
@@ -23,17 +27,8 @@ return res.status(400).json({message:"User already exists"});
 
 const hashedPassword = await bcrypt.hash(password,10);
 
-/* ROLE LOGIC */
-let role = "user";
-
-if (process.env.ADMIN_EMAIL && email === process.env.ADMIN_EMAIL) {
-  role = "admin";
-} else {
-  const adminCount = await User.countDocuments({ role: "admin" });
-  if (adminCount === 0) {
-    role = "admin";
-  }
-}
+// Public signup must never grant administrator privileges.
+const role = 'user';
 
 const user = await User.create({
   name,
@@ -70,7 +65,9 @@ const loginUser = async (req,res)=>{
 
 try{
 
-const {email,password} = req.body;
+const {password} = req.body;
+const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+if (!email || typeof password !== 'string' || !password) return res.status(400).json({message:'Email and password are required'});
 
 const user = await User.findOne({email});
 
@@ -78,6 +75,7 @@ if(!user){
 return res.status(400).json({message:"Invalid email"});
 }
 
+if (['banned', 'suspended'].includes(user.accountStatus)) return res.status(403).json({message:'Account is banned/suspended'});
 /* 🔥 HANDLE GOOGLE USER LOGIN */
 if(user.password === "google-login"){
 return res.status(400).json({
@@ -132,19 +130,16 @@ const ticket = await client.verifyIdToken({
 
 const payload = ticket.getPayload();
 
-const { email, name } = payload;
+if (!payload?.email_verified || !payload.email) return res.status(401).json({message:'A verified Google email is required'});
+const email = payload.email.toLowerCase();
+const name = payload.name || email;
 
 /* CHECK USER */
 let user = await User.findOne({ email });
 
 if (!user) {
 
-  let role = "user";
-
-  if (process.env.ADMIN_EMAIL && email === process.env.ADMIN_EMAIL) {
-    role = "admin";
-  }
-
+  const role = 'user';
   user = await User.create({
     name,
     email,
@@ -162,6 +157,7 @@ if (!user) {
 
 }
 
+if (['banned', 'suspended'].includes(user.accountStatus)) return res.status(403).json({message:'Account is banned/suspended'});
 /* GENERATE JWT */
 const jwtToken = jwt.sign(
   { id: user._id, role: user.role },

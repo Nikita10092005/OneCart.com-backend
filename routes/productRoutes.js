@@ -60,31 +60,37 @@ const mainCategoryMap = {
   books: ["Fiction", "Academic", "Exams", "Self-Help", "Children"],
 };
 
+mainCategoryMap.fashion = [...mainCategoryMap.men, ...mainCategoryMap.women];
+mainCategoryMap.sports = ['Fitness','Sportswear','Equipment','Sports Footwear','Outdoor'];
+const escapeRegex = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 // GET ALL / FILTERED / SEARCHED PRODUCTS
 router.get("/", async (req, res) => {
   try {
     const { main, sub, category, search } = req.query;
+    if ([main,sub,category,search].some(value => value !== undefined && (typeof value !== 'string' || value.length > 150))) return res.status(400).json({message:'Invalid search filters'});
     let filter = {};
 
     // SEARCH — name or description match
     if (search && search.trim()) {
       filter.$or = [
-        { name: { $regex: search.trim(), $options: "i" } },
-        { description: { $regex: search.trim(), $options: "i" } },
-        { category: { $regex: search.trim(), $options: "i" } },
+        { name: { $regex: escapeRegex(search.trim()), $options: "i" } },
+        { description: { $regex: escapeRegex(search.trim()), $options: "i" } },
+        { category: { $regex: escapeRegex(search.trim()), $options: "i" } },
       ];
     } else if (main && sub) {
       const key = `${main.toLowerCase()}|${sub.toLowerCase()}`;
       const dbCategories = subCategoryMap[key];
       if (dbCategories) {
-        filter.category = { $in: dbCategories };
+        filter.category = { $in: [...dbCategories, new RegExp(`^${escapeRegex(main)}\\|${escapeRegex(sub)}$`, 'i')] };
       } else {
         return res.json([]);
       }
     } else if (main) {
       const dbCategories = mainCategoryMap[main.toLowerCase()];
       if (dbCategories) {
-        filter.category = { $in: dbCategories };
+        const prefix = main.toLowerCase() === 'fashion' ? '(Men|Women|Fashion)' : escapeRegex(main);
+        filter.category = { $in: [...dbCategories, new RegExp(`^${prefix}\\|`, 'i')] };
       } else {
         return res.json([]);
       }
