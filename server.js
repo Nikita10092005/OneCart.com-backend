@@ -8,7 +8,7 @@ const path = require("path");
 // Use the hosting platform's DNS resolver.
 const jwt = require('jsonwebtoken');
 const User = require('./models/User');
-const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,https://onecartfrontend.netlify.app').split(',').map(s=>s.trim()).filter(Boolean);
+const allowedOrigins = (process.env.CORS_ORIGINS || process.env.FRONTEND_URL || 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,https://onecartfrontend.netlify.app').split(',').map(s=>s.trim()).filter(Boolean);
 /* Server imports */
 const http = require("http");
 const { Server } = require("socket.io");
@@ -202,6 +202,17 @@ io.on("connection", (socket) => {
     }
   });
 
+});
+
+// Preserve the existing optional bundled frontend used by the remote deployment.
+// Missing uploads and API requests must not return the SPA document.
+const publicDirectory = path.join(__dirname, 'public');
+app.use(express.static(publicDirectory));
+app.use((req, res, next) => {
+  if (req.method !== 'GET' || req.path.startsWith('/api') || req.path.startsWith('/uploads') || path.extname(req.path) || !req.accepts('html')) return next();
+  const indexFile = path.join(publicDirectory, 'index.html');
+  if (!require('fs').existsSync(indexFile)) return next();
+  res.sendFile(indexFile);
 });
 
 /* SERVER */
