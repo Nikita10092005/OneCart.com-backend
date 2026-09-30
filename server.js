@@ -88,6 +88,8 @@ app.use((err,req,res,next) => {
 });
 /* STATIC */
 app.use("/uploads", express.static(path.resolve(process.env.UPLOAD_DIR || path.join(__dirname,'uploads')), {setHeaders:res=>res.setHeader('X-Content-Type-Options','nosniff')}));
+// Existing public catalog images ship with the application. New uploads take precedence.
+app.use("/uploads", express.static(path.join(__dirname, 'catalog-images'), {setHeaders:res=>res.setHeader('X-Content-Type-Options','nosniff')}));
 
 /* 🔥 SOCKET SERVER SETUP */
 const server = http.createServer(app);
